@@ -265,6 +265,20 @@
   /* おさらい */
   .review-progress { text-align: center; font-size: 13px; color: var(--muted); margin-bottom: 10px; }
 
+  /* ふくしゅうえらび */
+  .replay-item {
+    display: flex; align-items: center; gap: 12px;
+    width: 100%; text-align: left;
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 14px 16px; margin-bottom: 10px;
+    transition: transform 0.15s;
+  }
+  .replay-item:active { transform: scale(0.98); }
+  .replay-item .r-scene { font-size: 32px; flex-shrink: 0; }
+  .replay-item .r-day { font-size: 12.5px; color: var(--muted); }
+  .replay-item .r-title { font-size: 16px; font-weight: bold; }
+  .replay-item .r-feed { margin-left: auto; font-size: 13px; color: var(--muted); flex-shrink: 0; }
+
   /* セクションクリア（エサげっと） */
   #screen-getfeed { text-align: center; padding-top: 14vh; }
   #screen-getfeed .feed-big { font-size: 100px; animation: popIn 0.5s ease; }
@@ -363,10 +377,25 @@
     <button class="big-btn" id="btn-start-lesson"></button>
   </div>
 
+  <div style="text-align:center; margin-top:14px;">
+    <button class="sub-btn" id="btn-replay-pick" style="display:none;">📚 まえの レッスンを ふくしゅうする</button>
+  </div>
+
   <div class="streak-row">
     <span>🔥 れんぞく <b id="streak-num">0</b> にち</span>
     <span>✅ ぜんぶで <b id="total-num">0</b> レッスン</span>
   </div>
+</div>
+
+<!-- ============ ふくしゅう えらび ============ -->
+<div class="screen" id="screen-replay-pick">
+  <div class="lesson-head">
+    <button class="back" id="btn-replay-back">←</button>
+    <h2 class="section-title" style="flex:1">📚 ふくしゅうする レッスン</h2>
+    <div style="width:44px"></div>
+  </div>
+  <p class="section-sub">ふくしゅうの エサは はんぶんだよ（おなじ レッスンは 1にち 1かいまで）</p>
+  <div id="replay-list"></div>
 </div>
 
 <!-- ============ レッスン ============ -->
@@ -1574,6 +1603,8 @@ function defaultState() {
     fed: 0,               // いまの生き物にあげたエサの合計
     feedStock: 0,         // まだあげていないエサ
     completedDays: {},    // { "1": "2026-07-05", ... }
+    feedHalf: 0,          // ふくしゅうでもらった「はんぶんエサ」(0か1)
+    replayRewarded: {},   // { "3": "2026-07-06" } その日ふくしゅうエサをもらった単元
     lastClearDate: null,
     streak: 0,
     gallery: [],          // [{species, date}]
@@ -1717,8 +1748,10 @@ function renderHome() {
     fill.style.width = pct + "%";
     label.textContent = `つぎまで あと 🍖${target - state.fed}`;
   }
-  document.getElementById("feed-count").textContent = state.feedStock;
+  document.getElementById("feed-count").textContent = state.feedStock + (state.feedHalf ? "＋½" : "");
   document.getElementById("btn-feed").disabled = state.feedStock <= 0 || state.petDone;
+  document.getElementById("btn-replay-pick").style.display =
+    Object.keys(state.completedDays).length ? "inline-block" : "none";
   document.getElementById("new-egg-banner").classList.toggle("show", state.petDone);
 
   // レッスンカード
@@ -1851,6 +1884,28 @@ document.getElementById("gallery-detail").onclick = e => {
   if (e.target.id === "gallery-detail") e.target.classList.remove("show");
 };
 
+/* ================= ふくしゅうえらび ================= */
+document.getElementById("btn-replay-pick").onclick = () => {
+  show("screen-replay-pick");
+  renderReplayPick();
+};
+document.getElementById("btn-replay-back").onclick = () => { show("screen-home"); renderHome(); };
+
+function renderReplayPick() {
+  const list = document.getElementById("replay-list");
+  list.innerHTML = "";
+  DAYS.filter(d => state.completedDays[d.day]).forEach(d => {
+    const rewarded = state.replayRewarded[d.day] === todayStr();
+    const b = document.createElement("button");
+    b.className = "replay-item";
+    b.innerHTML = `<span class="r-scene">${d.scene}</span>
+      <span><span class="r-day">Day ${d.day}</span><br><span class="r-title">${d.title}</span></span>
+      <span class="r-feed">${rewarded ? "✅ きょうは エサずみ" : "🍖 エサ はんぶん"}</span>`;
+    b.onclick = () => startLesson(d.day, true);
+    list.appendChild(b);
+  });
+}
+
 /* ================= レッスン ================= */
 let lesson = null; // { day, sections, idx, replay }
 
@@ -1908,20 +1963,37 @@ function renderSection() {
 }
 
 /* セクションクリア → エサげっと画面 */
+function feedCountText() {
+  return state.feedStock + (state.feedHalf ? " と はんぶん" : "");
+}
 function sectionClear(bonus) {
   stopSpeaking();
   stopRecording();
+  let title, sub;
   if (!lesson.replay) {
     state.feedStock++;
-    saveState();
+    title = bonus ? "ボーナスエサを げっと！" : "エサを げっと！";
+    sub = `もっている エサ：🍖 × ${feedCountText()}`;
+  } else if (state.replayRewarded[lesson.day] !== todayStr()) {
+    // ふくしゅうは はんぶんエサ。2つ あつまると 🍖1こ
+    state.feedHalf = (state.feedHalf || 0) + 1;
+    if (state.feedHalf >= 2) {
+      state.feedHalf = 0;
+      state.feedStock++;
+      title = "はんぶんが 2つで 🍖1こに！";
+    } else {
+      title = "はんぶんエサを げっと！";
+    }
+    sub = `ふくしゅうの エサは はんぶんだよ。もっている エサ：🍖 × ${feedCountText()}`;
+  } else {
+    title = "クリア！";
+    sub = "この レッスンの ふくしゅうエサは きょうは もう もらったよ。また あしたね";
   }
+  saveState();
   seGet();
   const isLastSection = lesson.idx >= lesson.sections.length - 1;
-  document.getElementById("getfeed-title").textContent =
-    lesson.replay ? "クリア！" : bonus ? "ボーナスエサを げっと！" : "エサを げっと！";
-  document.getElementById("getfeed-sub").textContent =
-    lesson.replay ? "（もういちど モードでは エサは もらえないよ）"
-    : `もっている エサ：🍖 × ${state.feedStock}`;
+  document.getElementById("getfeed-title").textContent = title;
+  document.getElementById("getfeed-sub").textContent = sub;
   document.getElementById("btn-getfeed-next").textContent = isLastSection ? "🏠 ホームへ" : "つぎへ →";
   show("screen-getfeed");
 }
@@ -1944,6 +2016,11 @@ function sectionSkip() {
 }
 
 function finishLesson() {
+  if (lesson.replay) {
+    // きょうのぶんの ふくしゅうエサを もらいおわった しるし
+    state.replayRewarded[lesson.day] = todayStr();
+    saveState();
+  }
   if (!lesson.replay) {
     const t = todayStr();
     state.completedDays[lesson.day] = t;
